@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert
+    kompose.version: 1.30.0 (9d8dcb518)
+  labels:
+    io.kompose.service: backend
+  name: backend
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: backend
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert
+        kompose.version: 1.30.0 (9d8dcb518)
+      labels:
+        io.kompose.network/tarea-spring-net: "true"
+        io.kompose.service: backend
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: busybox
+          command: ['sh', '-c', 'until nc -z db 5432; do echo waiting for db; sleep 2; done;']
+      containers:
+        - name: springboot-app
+          image: felipe2p05/springboot-app:latest
+          ports:
+            - containerPort: 8080
+              hostPort: 8080
+              protocol: TCP
+          env:
+            - name: SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT
+              value: org.hibernate.dialect.PostgreSQLDialect
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: password
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://db:5432/mydb
+            - name: SPRING_DATASOURCE_USERNAME
+              value: user
+            - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              value: update
+          resources: {}
+      restartPolicy: Always

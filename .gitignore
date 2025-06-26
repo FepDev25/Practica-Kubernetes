@@ -1,0 +1,8 @@
+# Ignore Visual Studio Code directory
+.vscode/
+
+# Ignore frontend directory
+frontend/
+
+# Ignore tarea directory (backend)
+tarea/
