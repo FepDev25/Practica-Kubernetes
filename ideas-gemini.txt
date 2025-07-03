@@ -1,0 +1,137 @@
+Tolerancia a Fallos Implementada
+
+  Tu configuración actual ya cuenta con mecanismos de resiliencia importantes, principalmente a nivel de contenedor y de datos:
+
+
+   1. Reinicio Automático de Contenedores (`restartPolicy: Always`): Todos tus Deployments tienen esta política. Si un contenedor falla por un error
+      inesperado, Kubernetes intentará reiniciarlo automáticamente. Esta es la forma más básica de tolerancia a fallos.
+
+
+   2. Chequeos de Salud para el Backend (`livenessProbe` y `readinessProbe`): Esta es una excelente práctica y la tienes bien implementada en tu
+      backend-deployment.yaml.
+       * livenessProbe: Kubernetes revisa periódicamente si tu aplicación de backend sigue "viva". Si la sonda falla varias veces, Kubernetes asume que la
+         aplicación está bloqueada y reinicia el contenedor.
+       * readinessProbe: Kubernetes usa esta sonda para saber si la aplicación está lista para recibir tráfico. Si no lo está (por ejemplo, porque está
+         arrancando o sobrecargada), el pod se elimina temporalmente del balanceador de carga del Service, evitando que los usuarios reciban errores.
+
+
+   3. Persistencia de Datos para la Base de Datos (`PersistentVolumeClaim`): El db-deployment.yaml utiliza un PersistentVolumeClaim (pgdata). Esto es
+      crucial, ya que asegura que si el pod de la base de datos falla y se reinicia (incluso en otro nodo del clúster), se conectará al mismo volumen de
+      almacenamiento, por lo que los datos no se perderán.
+
+
+   4. Gestión de Dependencias al Inicio (`initContainers`): El backend-deployment.yaml usa un initContainer para esperar a que la base de datos (db) esté
+      disponible antes de iniciar la aplicación principal. Esto no es tolerancia a fallos en tiempo de ejecución, pero sí aumenta la robustez del sistema
+      durante los despliegues o reinicios.
+
+  Nuevas Ideas para Mejorar la Tolerancia a Fallos
+
+
+  Aunque tienes una buena base, tu sistema actual no sobreviviría a un fallo de un pod o de un nodo completo, ya que cada componente tiene una sola réplica.
+  Aquí tienes las mejoras más importantes que podrías implementar:
+
+  1. Aumentar el Número de Réplicas (Alta Disponibilidad)
+
+
+   * Problema: Todos tus Deployments (frontend, backend, db) están configurados con replicas: 1. Esto crea un "Single Point of Failure" (Punto Único de
+     Fallo). Si ese único pod falla, el servicio se cae.
+   * Solución: Aumenta el número de réplicas para tus componentes sin estado (frontend y backend).
+       * En frontend-deployment.yaml y backend-deployment.yaml, cambia:
+
+   1         spec:
+   2           replicas: 1
+
+          a:
+
+
+   1         spec:
+   2           replicas: 3 # O al menos 2
+
+       * Beneficio: El Service de Kubernetes balanceará la carga entre las réplicas. Si un pod falla o se está actualizando, el tráfico se redirige
+         automáticamente a las otras, garantizando que el servicio siga disponible.
+
+
+  2. Usar `StatefulSet` para la Base de Datos
+
+
+   * Problema: Estás usando un Deployment para la base de datos. Los Deployments son ideales para aplicaciones sin estado, pero no para bases de datos. No
+     proporcionan identidades de red estables ni garantías de orden en el escalado.
+   * Solución: Reemplaza el db-deployment.yaml por un StatefulSet.
+   * Beneficio: Un StatefulSet está diseñado específicamente para cargas de trabajo con estado como PostgreSQL. Proporciona:
+       * Identidad de red estable: Tus pods se llamarán db-0, db-1, etc., y mantendrán su identidad y su volumen de datos tras un reinicio.
+       * Despliegues y escalados ordenados: Asegura que los pods se crean, actualizan o eliminan en un orden estricto, lo cual es fundamental para sistemas de
+         bases de datos en clúster.
+       * Nota: Para una verdadera alta disponibilidad de la base de datos, necesitarías una configuración más compleja con replicación (por ejemplo, usando un 
+         operador como Patroni), pero migrar a un `StatefulSet` es el primer paso correcto.
+
+  3. Añadir Chequeos de Salud al Frontend y la Base de Datos
+
+
+   * Problema: Ni el frontend ni la base de datos tienen livenessProbe o readinessProbe.
+   * Solución:
+       * Para el frontend: Añade una sonda simple para asegurar que el servidor web está respondiendo. En frontend-deployment.yaml:
+
+
+   1         containers:
+   2         - name: angular-client
+   3           image: felipe2p05/angular-client:latest
+   4           readinessProbe:
+   5             httpGet:
+   6               path: /
+   7               port: 80
+   8             initialDelaySeconds: 5
+   9             periodSeconds: 10
+
+       * Para la base de datos: Añade una sonda para verificar que el puerto de PostgreSQL está abierto. En db-deployment.yaml (o en tu futuro StatefulSet):
+
+
+   1         containers:
+   2         - name: postgres-spring
+   3           # ...
+   4           livenessProbe:
+   5             tcpSocket:
+   6               port: 5432
+   7             initialDelaySeconds: 30
+   8             periodSeconds: 10
+
+
+  4. Definir `resources` (requests y limits)
+
+
+   * Problema: Tus contenedores tienen resources: {}. Esto significa que no estás indicando a Kubernetes cuántos recursos (CPU/memoria) necesitan o cuál es su
+     límite.
+   * Solución: Define requests (recursos garantizados) y limits (máximo que pueden consumir).
+
+
+   1     resources:
+   2       requests:
+   3         memory: "256Mi"
+   4         cpu: "250m" # 0.25 de un core
+   5       limits:
+   6         memory: "512Mi"
+   7         cpu: "500m"
+
+   * Beneficio: Esto mejora la estabilidad general del clúster. Evita que un pod consuma todos los recursos de un nodo y afecte a otros. Además, ayuda a
+     Kubernetes a tomar mejores decisiones sobre dónde planificar tus pods.
+
+  5. Implementar `PodDisruptionBudgets` (PDB)
+
+
+   * Problema: Cuando hay operaciones de mantenimiento en el clúster (como actualizar un nodo), tus pods pueden ser eliminados. Si tienes varias réplicas pero
+     todas son eliminadas a la vez, tu servicio se caerá igualmente.
+   * Solución: Crea un PodDisruptionBudget para tus servicios críticos (backend y frontend, una vez que tengan múltiples réplicas).
+
+
+   1     apiVersion: policy/v1
+   2     kind: PodDisruptionBudget
+   3     metadata:
+   4       name: backend-pdb
+   5     spec:
+   6       minAvailable: 2 # O un porcentaje como "50%"
+   7       selector:
+   8         matchLabels:
+   9           io.kompose.service: backend
+
+   * Beneficio: Un PDB le dice a Kubernetes: "No elimines voluntariamente más pods de este servicio si eso hace que queden menos de minAvailable réplicas
+     saludables". Esto protege la disponibilidad de tu aplicación durante el mantenimiento del clúster.
+

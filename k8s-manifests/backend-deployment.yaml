@@ -9,7 +9,7 @@ metadata:
   name: backend
   namespace: default
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       io.kompose.service: backend
@@ -28,10 +28,26 @@ spec:
           command: ['sh', '-c', 'until nc -z db 5432; do echo waiting for db; sleep 2; done;']
       containers:
         - name: springboot-app
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
           image: felipe2p05/springboot-app:latest
           ports:
             - containerPort: 8080
-              hostPort: 8080
               protocol: TCP
           env:
             - name: SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT
